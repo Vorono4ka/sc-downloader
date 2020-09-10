@@ -46,6 +46,23 @@ class Downloader(Reader, Writer):
         self.writeUInt32(len(encoded))
         self.buffer += encoded
 
+    def brute_force(self):
+        self.info['build'] = 0
+
+        while downloader.code != 7:
+            self.info['build'] += 1
+
+            if self.info['build'] >= 300:
+                self.info['build'] = 0
+                self.info['major'] += 1
+
+            self.send_client_hello()
+            self.recv_data()
+
+            if self.info['major'] >= config['major'] + 5:
+                print('Version not matched!')
+                exit()
+
     # Client Hello packet sending
     def send_client_hello(self):
         self.buffer = b''  # clear buffer
@@ -137,25 +154,11 @@ if __name__ == '__main__':
 
     if downloader.code != 7:
         print('Wrong version, version selection started!')
-        downloader.info['build'] = 0
+        downloader.brute_force()
 
-        while downloader.code != 7:
-            downloader.info['build'] += 1
-
-            if downloader.info['build'] >= 300:
-                downloader.info['build'] = 0
-                downloader.info['major'] += 1
-
-            downloader.send_client_hello()
-            downloader.recv_data()
-
-            if downloader.info['major'] >= config['major'] + 5:
-                print('Version not matched!')
-                exit()
-
-        if downloader.code == 7:
-            print('Version is founded!')
-            dump(downloader.info, open('config.json', 'w'), indent=4)
+    if downloader.code == 7:
+        print('Version is founded!')
+        dump(downloader.info, open('config.json', 'w'), indent=4)
 
     for file in downloader.finger['files']:
         file_path = file['file']
@@ -168,8 +171,10 @@ if __name__ == '__main__':
             folder = ''
             filename = file_path
 
-        if folder == 'sc3d':
-            mkdirs(f'downloads/{folder}')
+        mkdirs(f'downloads/{folder}')
 
-            if 'scw' in filename:
-                open(f'downloads/{folder}/{filename}', 'wb').write(downloader.download(file_path))
+        # Download all files
+        # open(f'downloads/{folder}/{filename}', 'wb').write(downloader.download(file_path))
+
+        # Download Specific File
+        # open(f'file/path/filename.extension', 'wb').write(downloader.download('path/filename.extension'))
