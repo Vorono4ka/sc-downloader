@@ -1,9 +1,34 @@
-from json import loads
-
-from utils.writer import Writer
-from utils.reader import Reader
-from requests import get
+import os
 import socket
+import sys
+from json import loads, load, dump
+
+from requests import get
+
+from utils.reader import Reader
+from utils.writer import Writer
+
+
+def exit():
+    input('Press Enter to exit: ')
+    sys.exit()
+
+
+def mkdirs(directory: str):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+
+# Receiving all data
+def recvall(sock: socket.socket, packet_length: int):
+    received_data = b''
+    while packet_length > 0:
+        s = sock.recv(packet_length)
+        if not s:
+            raise EOFError
+        received_data += s
+        packet_length -= len(s)
+    return received_data
 
 
 class Downloader(Reader, Writer):
@@ -21,63 +46,58 @@ class Downloader(Reader, Writer):
         self.writeUInt32(len(encoded))
         self.buffer += encoded
 
-    # Receiving all data
-    def recvall(self, sock: socket.socket, packet_length: int):
-        received_data = b''
-        while packet_length > 0:
-            s = sock.recv(packet_length)
-            if not s:
-                raise EOFError
-            received_data += s
-            packet_length -= len(s)
-        return received_data
-
-    # Connecting to the Brawl Stars server
-    def connect(self):
-        self.s.connect(('game.brawlstarsgame.com', 9339))
-
     # Client Hello packet sending
-    def send_client_hello(self, info: dict):
-        self.writeUInt32(2)
-        self.writeUInt32(11)
-        self.writeUInt32(info['major'])
-        self.writeUInt32(0)
-        self.writeUInt32(info['minor'])
-        self.writeUInt32(0)
-        self.writeUInt32(2)
-        self.writeUInt32(2)
+    def send_client_hello(self):
+        self.buffer = b''  # clear buffer
+        
+        # 0 - классический накл, 1 - накл с измененными раундами, 2 - юзается в кок
+        self.writeUInt32(0)  # Protocol Version
+        self.writeUInt32(11)  # Key Version
+        self.writeUInt32(self.info['major'])
+        self.writeUInt32(self.info['revision'])
+        self.writeUInt32(self.info['build'])
+        self.writeString('')  # ContentHash
+        self.writeUInt32(2)  # DeviceType
+        self.writeUInt32(2)  # AppStore
+
         packet_data = self.buffer
         self.buffer = b''
         self.writeUShort(10100)
         self.buffer += len(packet_data).to_bytes(3, 'big')
         self.writeUShort(0)
         self.buffer += packet_data
+
+        self.s = socket.create_connection((self.info['server_ip'], 9339))
+
         self.s.send(self.buffer)
 
     # Login Failed packet receiving
     def recv_data(self):
         header = self.s.recv(7)
         packet_length = int.from_bytes(header[2:5], 'big')
-        received_packet_data = self.recvall(self.s, packet_length)
+        received_packet_data = recvall(self.s, packet_length)
         super().__init__(initial_bytes=received_packet_data)
-        self.code = self.readUInt32()
-        self.finger = self.readString()
-        self.readString()
-        self.readString()
-        self.readString()
-        self.readString()
-        self.readUInt32()
-        self.readByte()
-        self.readUInt32()
-        self.readUInt32()
-        self.content_url = self.readString()
-        self.assets_url = self.readString()
-        if self.code == 7:
-            self.finger = loads(self.finger)
 
-    def download(self, filename: str):
+        self.code = self.readUInt32()
+        if self.code in [7, 8]:
+            self.finger = self.readString()
+            self.readString()
+            self.readString()
+            self.readString()
+            self.readString()
+            self.readUInt32()
+            self.readByte()
+            self.readUInt32()
+            self.readUInt32()
+            self.content_url = self.readString()
+            self.assets_url = self.readString()
+
+            if self.code == 7:
+                self.finger = loads(self.finger)
+
+    def download(self, path: str):
         if self.code == 7:
-            request = get(f'{self.assets_url}/{self.finger["sha"]}/{filename}')
+            request = get(f'{self.assets_url}/{self.finger["sha"]}/{path}')
             status_code = request.status_code
             if status_code == 200:
                 filedata = request.content
@@ -91,10 +111,11 @@ class Downloader(Reader, Writer):
             print(f'Error detected! Error code: {self.code}')
             return b''
 
-    def __init__(self, initial_bytes: bytes = b''):
+    def __init__(self, initial_bytes: bytes = b'', info: dict = None):
         super().__init__(initial_bytes)
-        self.s = socket.socket()
+        self.s = None
         self.buffer = b''
+        self.info = info
 
         self.content_url = None
         self.assets_url = None
@@ -104,9 +125,51 @@ class Downloader(Reader, Writer):
 
 # Test
 if __name__ == '__main__':
-    downloader = Downloader()
-    downloader.connect()
-    downloader.send_client_hello({'major': 27, 'minor': 267})
+    if not os.path.exists('downloads'):
+        os.mkdir('downloads')
+
+    config = load(open('config.json'))
+
+    downloader = Downloader(info={**config})
+
+    downloader.send_client_hello()
     downloader.recv_data()
-    print(downloader.download('sc3d/8bit_geo.scw'))
-# Test
+
+    if downloader.code != 7:
+        print('Wrong version, version selection started!')
+        downloader.info['build'] = 0
+
+        while downloader.code != 7:
+            downloader.info['build'] += 1
+
+            if downloader.info['build'] >= 300:
+                downloader.info['build'] = 0
+                downloader.info['major'] += 1
+
+            downloader.send_client_hello()
+            downloader.recv_data()
+
+            if downloader.info['major'] >= config['major'] + 5:
+                print('Version not matched!')
+                exit()
+
+        if downloader.code == 7:
+            print('Version is founded!')
+            dump(downloader.info, open('config.json', 'w'), indent=4)
+
+    for file in downloader.finger['files']:
+        file_path = file['file']
+
+        if '/' in file_path:
+            slash_index = file_path.index('/')
+            folder = file_path[:slash_index]
+            filename = file_path[slash_index + 1:]
+        else:
+            folder = ''
+            filename = file_path
+
+        if folder == 'sc3d':
+            mkdirs(f'downloads/{folder}')
+
+            if 'scw' in filename:
+                open(f'downloads/{folder}/{filename}', 'wb').write(downloader.download(file_path))
