@@ -66,13 +66,12 @@ class Downloader(Reader, Writer):
     # Client Hello packet sending
     def send_client_hello(self):
         self.buffer = b''  # clear buffer
-        
-        # 0 - классический накл, 1 - накл с измененными раундами, 2 - юзается в кок
+
         self.writeUInt32(0)  # Protocol Version
         self.writeUInt32(11)  # Key Version
-        self.writeUInt32(self.info['major'])
-        self.writeUInt32(self.info['revision'])
-        self.writeUInt32(self.info['build'])
+        self.writeUInt32(self.info['major'])  # major
+        self.writeUInt32(self.info['revision'])  # revision
+        self.writeUInt32(self.info['build'])  # build (minor)
         self.writeString('')  # ContentHash
         self.writeUInt32(2)  # DeviceType
         self.writeUInt32(2)  # AppStore
